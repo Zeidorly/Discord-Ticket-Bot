@@ -8,8 +8,8 @@ TOKEN = ''
 ICON = ''
 NAME = ''
 
-SUPPORT_ROLE_ID =
-TRANSCRIPT_CHANNEL_ID =
+SUPPORT_ROLE_ID = 
+TRANSCRIPT_CHANNEL_ID = 
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -64,8 +64,58 @@ class TicketsView(discord.ui.View):
         )
         embed.set_footer(text=NAME, icon_url=ICON)
         embed.set_thumbnail(url=ICON)
-        await channel.send(embed=embed)
+        await channel.send(embed=embed, view=TicketCloseView())
         await interaction.response.send_message(f'I have opened a ticket for you at {channel.mention}', ephemeral=True)
+
+class TicketCloseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label='Close Ticket', style=discord.ButtonStyle.red, custom_id='close_ticket_button')
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not (interaction.user.guild_permissions.administrator or get(interaction.guild.roles, id=SUPPORT_ROLE_ID) in interaction.user.roles):
+            await interaction.response.send_message("You do not have permission to close this ticket.", ephemeral=True)
+            return
+
+        if interaction.channel and interaction.channel.name.startswith('ticket-'):
+            channel_name = interaction.channel.name
+            parts = channel_name.split('-')
+            if len(parts) >= 3:
+                username = parts[1]
+                try:
+                    user_id = int(parts[2])
+                    user_obj = interaction.guild.get_member(user_id)
+                except ValueError:
+                    user_obj = None
+            else:
+                username = "Unknown User"
+                user_obj = None
+
+            transcript_text = ''
+            async for message in interaction.channel.history(limit=None, oldest_first=True):
+                timestamp = message.created_at.strftime('%Y-%m-%d %H:%M')
+                author = message.author
+                content = message.content
+                transcript_text += f"[{timestamp}] {author}: {content}\n"
+
+            transcript_channel = interaction.guild.get_channel(TRANSCRIPT_CHANNEL_ID)
+            if transcript_channel:
+                embed = discord.Embed(
+                    title='Ticket Transcript',
+                    description=f'Transcript for {user_obj.mention if user_obj else username}',
+                    color=discord.Color.greyple()
+                )
+                await transcript_channel.send(embed=embed)
+                transcript_bytes = io.BytesIO(transcript_text.encode('utf-8'))
+                file = discord.File(fp=transcript_bytes, filename='transcript.txt')
+                await transcript_channel.send(file=file)
+            else:
+                await interaction.response.send_message("Transcript channel not found.", ephemeral=True)
+
+            await interaction.response.send_message("Closing this ticket", ephemeral=True)
+            await interaction.channel.delete()
+        else:
+            await interaction.response.send_message("This button can only be used in ticket channels.", ephemeral=True)
 
 class TicketBot(discord.Client):
     def __init__(self):
@@ -75,6 +125,7 @@ class TicketBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
+        self.add_view(TicketCloseView())
 
     async def on_ready(self):
         if not self.added_views:
